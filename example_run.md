@@ -1,0 +1,560 @@
+# Project Structure
+
+```
+.
+├── README.md
+├── cmd
+│   ├── root.go
+├── go.mod
+├── go.sum
+├── internal
+│   ├── discovery
+│   │   ├── walker.go
+│   ├── output
+│   │   ├── writer.go
+│   ├── types
+│   │   ├── types.go
+├── main.go
+├── project_structure.md
+```
+
+# File Contents
+
+---
+
+### `cmd/root.go`
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/kzelealem/apex/internal/discovery"
+	"github.com/kzelealem/apex/internal/output"
+	"github.com/kzelealem/apex/internal/types"
+	gitignore "github.com/sabhiram/go-gitignore"
+	"github.com/spf13/cobra"
+)
+
+var cfg types.Config
+
+var rootCmd = &cobra.Command{
+	Use:   "apex [directory]",
+	Short: "Apex is the fastest and most powerful tool for generating project structure documentation.",
+	Long: `Apex performs a highly-concurrent scan of a directory to generate documentation
+in various formats. It supports advanced filtering and customization to provide
+the ultimate project overview.`,
+	Args: cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) > 0 {
+			cfg.RootDir = args[0]
+		} else {
+			cfg.RootDir = "."
+		}
+		if err := run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+func init() {
+	rootCmd.Flags().StringVarP(&cfg.OutputFileName, "output", "o", "project_structure.md", "Name of the output file.")
+	rootCmd.Flags().StringVarP(&cfg.IgnoreFileName, "ignore-file", "i", ".gitignore", "Path to a custom ignore file.")
+	rootCmd.Flags().StringSliceVarP(&cfg.AdditionalIgnores, "add-ignore", "a", []string{}, "Additional patterns to ignore.")
+	rootCmd.Flags().StringSliceVar(&cfg.IncludePatterns, "include", []string{}, "Only include files matching these patterns (e.g., '*.go').")
+	rootCmd.Flags().BoolVarP(&cfg.TreeOnly, "tree-only", "t", false, "Only output the directory tree structure.")
+	rootCmd.Flags().StringVarP(&cfg.OutputFormat, "format", "f", "markdown", "Output format (markdown, json).")
+	rootCmd.Flags().Int64Var(&cfg.MaxFileSize, "max-size", 0, "Maximum file size to include (in bytes).")
+	rootCmd.Flags().BoolVarP(&cfg.Quiet, "quiet", "q", false, "Suppress all interactive output except for errors.")
+}
+
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	if !cfg.Quiet {
+		fmt.Printf("[+] Starting Apex scan of: %s\n\n", cfg.RootDir)
+	}
+
+	cfg.AdditionalIgnores = append(cfg.AdditionalIgnores, cfg.OutputFileName, ".git")
+
+	ignoreMatcher, err := loadIgnoreMatcher(cfg.RootDir, cfg.IgnoreFileName, cfg.AdditionalIgnores)
+	if err != nil {
+		return fmt.Errorf("failed to load ignore rules: %w", err)
+	}
+
+	if !cfg.Quiet {
+		fmt.Println("[1/3] Scanning project structure...")
+	}
+	filePaths, tree, err := discovery.DiscoverFilesAndBuildTree(&cfg, ignoreMatcher)
+	if err != nil {
+		return fmt.Errorf("failed to walk directory: %w", err)
+	}
+
+	if !cfg.TreeOnly && !cfg.Quiet {
+		fmt.Println("\n[2/3] Reading file contents...")
+	}
+
+	if !cfg.Quiet {
+		step := "3/3"
+		if cfg.TreeOnly {
+			step = "2/2"
+		}
+		fmt.Printf("\n[%s] Writing output to %s...\n", step, cfg.OutputFileName)
+	}
+
+	if err := output.ProcessAndWriteFiles(&cfg, filePaths, tree); err != nil {
+		return fmt.Errorf("failed to generate output: %w", err)
+	}
+
+	if !cfg.Quiet {
+		fmt.Printf("\n[+] Success! Project documentation saved to '%s' in %s format.\n", cfg.OutputFileName, cfg.OutputFormat)
+	}
+
+	return nil
+}
+
+func loadIgnoreMatcher(rootDir, ignoreFileName string, additionalIgnores []string) (*gitignore.GitIgnore, error) {
+	ignoreFilePath := filepath.Join(rootDir, ignoreFileName)
+	ignoreMatcher, err := gitignore.CompileIgnoreFileAndLines(ignoreFilePath, additionalIgnores...)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if !cfg.Quiet {
+				fmt.Printf("[!] Note: %s not found. Proceeding without it.\n", ignoreFileName)
+			}
+			return gitignore.CompileIgnoreLines(additionalIgnores...), nil
+		}
+		return nil, err
+	}
+	return ignoreMatcher, nil
+}
+
+```
+
+---
+
+### `go.mod`
+
+```mod
+module github.com/kzelealem/apex
+
+go 1.24.1
+
+require (
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	github.com/spf13/cobra v1.10.1
+)
+
+require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
+)
+
+```
+
+---
+
+### `go.sum`
+
+```sum
+github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
+github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
+github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
+github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 h1:OkMGxebDjyw0ULyrTYWeN0UNCCkmCWfjPnIA2W6oviI=
+github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06/go.mod h1:+ePHsJ1keEjQtpvf9HHw0f4ZeJ0TLRsxhunSI2hYJSs=
+github.com/spf13/cobra v1.10.1 h1:lJeBwCfmrnXthfAupyUTzJ/J4Nc1RsHC/mSRU2dll/s=
+github.com/spf13/cobra v1.10.1/go.mod h1:7SmJGaTHFVBY0jW4NXGluQoLvhqFQM+6XSKD+P4XaB0=
+github.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=
+github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
+github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=
+github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+
+```
+
+---
+
+### `internal/output/writer.go`
+
+```go
+package output
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+
+	"github.com/kzelealem/apex/internal/types"
+)
+
+func ProcessAndWriteFiles(cfg *types.Config, paths []string, tree string) error {
+	switch cfg.OutputFormat {
+	case "markdown":
+		return writeMarkdown(cfg, paths, tree)
+	case "json":
+		return writeJSON(cfg, paths, tree)
+	default:
+		return fmt.Errorf("unsupported output format: %s", cfg.OutputFormat)
+	}
+}
+
+func writeMarkdown(cfg *types.Config, paths []string, tree string) error {
+	outputFile, err := os.Create(cfg.OutputFileName)
+	if err != nil {
+		return fmt.Errorf("failed to create output file '%s': %w", cfg.OutputFileName, err)
+	}
+	defer outputFile.Close()
+	writer := bufio.NewWriter(outputFile)
+	defer writer.Flush()
+
+	writer.WriteString("# Project Structure\n\n")
+	writer.WriteString("```\n")
+	writer.WriteString(tree)
+	writer.WriteString("```\n\n")
+
+	if !cfg.TreeOnly {
+		writer.WriteString("# File Contents\n\n")
+		return processFilesForMarkdown(cfg, writer, paths)
+	}
+	return nil
+}
+
+func writeJSON(cfg *types.Config, paths []string, tree string) error {
+	output := make(map[string]interface{})
+	output["projectTree"] = tree
+	if !cfg.TreeOnly {
+		fileContents := make(map[string]string)
+		for _, path := range paths {
+			relPath, _ := filepath.Rel(cfg.RootDir, path)
+			content, err := os.ReadFile(path)
+			if err != nil {
+				fileContents[relPath] = fmt.Sprintf("Error reading file: %v", err)
+			} else {
+				fileContents[relPath] = string(content)
+			}
+		}
+		output["fileContents"] = fileContents
+	}
+	jsonData, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfg.OutputFileName, jsonData, 0644)
+}
+
+func processFilesForMarkdown(cfg *types.Config, writer *bufio.Writer, paths []string) error {
+	numWorkers := runtime.NumCPU()
+	pathChan := make(chan string, len(paths))
+	resultChan := make(chan types.FileData, len(paths))
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go fileReaderWorker(&wg, pathChan, resultChan, cfg.RootDir)
+	}
+
+	for _, path := range paths {
+		pathChan <- path
+	}
+	close(pathChan)
+	wg.Wait()
+	close(resultChan)
+
+	for data := range resultChan {
+		if !cfg.Quiet {
+			fmt.Printf("  [read] %s\n", data.Path)
+		}
+		fmt.Fprintf(writer, "---\n\n### `%s`\n\n", data.Path)
+		if data.Err != nil {
+			fmt.Fprintf(writer, "```\nError reading file: %v\n```\n\n", data.Err)
+			continue
+		}
+		lang := strings.TrimPrefix(filepath.Ext(data.Path), ".")
+		fmt.Fprintf(writer, "```%s\n", lang)
+		writer.Write(data.Content)
+		writer.WriteString("\n```\n\n")
+	}
+
+	return nil
+}
+
+func fileReaderWorker(wg *sync.WaitGroup, pathChan <-chan string, resultChan chan<- types.FileData, rootDir string) {
+	defer wg.Done()
+	for path := range pathChan {
+		relPath, _ := filepath.Rel(rootDir, path)
+		content, err := os.ReadFile(path)
+		resultChan <- types.FileData{
+			Path:    relPath,
+			Content: content,
+			Err:     err,
+		}
+	}
+}
+
+```
+
+---
+
+### `internal/types/types.go`
+
+```go
+package types
+
+type FileData struct {
+	Path    string
+	Content []byte
+	Err     error
+}
+
+type Config struct {
+	RootDir           string
+	OutputFileName    string
+	IgnoreFileName    string
+	AdditionalIgnores []string
+	IncludePatterns   []string
+	TreeOnly          bool
+	OutputFormat      string
+	MaxFileSize       int64
+	Quiet             bool
+}
+
+```
+
+---
+
+### `internal/discovery/walker.go`
+
+```go
+package discovery
+
+import (
+	"fmt"
+	"io/fs"
+	"path/filepath"
+	"strings"
+
+	"github.com/kzelealem/apex/internal/types"
+	gitignore "github.com/sabhiram/go-gitignore"
+)
+
+func DiscoverFilesAndBuildTree(cfg *types.Config, ignoreMatcher *gitignore.GitIgnore) ([]string, string, error) {
+	var filePaths []string
+	var treeBuilder strings.Builder
+
+	walkErr := filepath.WalkDir(cfg.RootDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(cfg.RootDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." {
+			base := filepath.Base(cfg.RootDir)
+			treeBuilder.WriteString(fmt.Sprintf("%s\n", base))
+			if !cfg.Quiet {
+				fmt.Printf("[scan] dir: %s\n", base)
+			}
+			return nil
+		}
+
+		matchPath := relPath
+		if d.IsDir() {
+			matchPath += string(filepath.Separator)
+		}
+		if ignoreMatcher.MatchesPath(matchPath) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if len(cfg.IncludePatterns) > 0 {
+			included := false
+			for _, pattern := range cfg.IncludePatterns {
+				if matched, _ := filepath.Match(pattern, d.Name()); matched {
+					included = true
+					break
+				}
+			}
+			if !d.IsDir() && !included {
+				return nil
+			}
+		}
+
+		if !d.IsDir() && cfg.MaxFileSize > 0 {
+			info, err := d.Info()
+			if err == nil && info.Size() > cfg.MaxFileSize {
+				if !cfg.Quiet {
+					fmt.Printf("  [scan] skip: %s (size limit exceeded)\n", relPath)
+				}
+				return nil
+			}
+		}
+
+		depth := strings.Count(relPath, string(filepath.Separator))
+		indent := strings.Repeat("│   ", depth)
+		prefix := "├── "
+		treeBuilder.WriteString(fmt.Sprintf("%s%s%s\n", indent, prefix, d.Name()))
+
+		if !d.IsDir() {
+			filePaths = append(filePaths, path)
+			if !cfg.Quiet {
+				fmt.Printf("  [scan] file: %s\n", relPath)
+			}
+		} else {
+			if !cfg.Quiet {
+				fmt.Printf("  [scan] dir: %s\n", relPath)
+			}
+		}
+		return nil
+	})
+
+	if walkErr == filepath.SkipDir {
+		return filePaths, treeBuilder.String(), nil
+	}
+
+	return filePaths, treeBuilder.String(), walkErr
+}
+
+```
+
+---
+
+### `project_structure.md`
+
+```md
+{
+  "fileContents": {
+    "README.md": "# Apex\n\nA high-performance CLI tool for generating project structure documentation.\n\nApex scans a directory, respects gitignore rules, and creates a comprehensive document detailing the project's file tree and the contents of its files. It's designed to be fast, flexible, and easy to integrate into any workflow.\n\n## Features\n\n-   **High Performance:** Concurrently scans the file system and reads files to maximize speed.\n-   **Advanced Filtering:** Go beyond `.gitignore` with custom ignore files, on-the-fly ignore patterns, include-only filters, and file size limits.\n-   **Multiple Output Formats:** Generate documentation in Markdown for easy viewing or JSON for programmatic use.\n-   **Interactive \u0026 Quiet Modes:** Watch the process live with detailed logs or run it silently in automated scripts.\n-   **Highly Customizable:** Fine-tune the output with a rich set of command-line flags.\n\n## Installation\n\n### With Go\n\nIf you have Go installed, you can install `apex` directly:\n\n```sh\ngo install github.com/kzelealem/apex@latest\n```\n\n### From Source\n\n```sh\ngit clone https://github.com/kzelealem/apex.git\ncd apex\ngo build\n./apex --help\n```\n\n## Usage\n\n### Basic Usage\n\nTo scan the current directory and generate a `project_structure.md` file:\n\n```sh\napex\n```\n\nTo scan a specific directory:\n\n```sh\napex ../my-other-project\n```\n\n### Advanced Example\n\nGenerate a Markdown document named `docs.md` for a Go project, including only `.go` and `.mod` files, ignoring anything over 50KB:\n\n```sh\napex . -o docs.md --include \"*.go\" --include \"*.mod\" --max-size 51200\n```\n\n### Options\n\n| Flag                | Shorthand | Description                                                   | Default                |\n| ------------------- | --------- | ------------------------------------------------------------- | ---------------------- |\n| `--output`          | `-o`      | Name of the output file.                                      | `project_structure.md` |\n| `--ignore-file`     | `-i`      | Path to a custom ignore file (e.g., `.dockerignore`).         | `.gitignore`           |\n| `--add-ignore`      | `-a`      | Additional patterns to ignore (can be used multiple times).   | `[]`                   |\n| `--include`         |           | Only include files matching these patterns.                   | `[]`                   |\n| `--max-size`        |           | Maximum file size to include, in bytes. (0 for no limit).     | `0`                    |\n| `--format`          | `-f`      | Output format (`markdown` or `json`).                         | `markdown`             |\n| `--tree-only`       | `-t`      | Only output the directory tree structure, no file content.    | `false`                |\n| `--quiet`           | `-q`      | Suppress all interactive output except for errors.            | `false`                |\n| `--help`            | `-h`      | Show help message.                                            |                        |\n",
+    "cmd/root.go": "package cmd\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\n\t\"github.com/kzelealem/apex/internal/discovery\"\n\t\"github.com/kzelealem/apex/internal/output\"\n\t\"github.com/kzelealem/apex/internal/types\"\n\tgitignore \"github.com/sabhiram/go-gitignore\"\n\t\"github.com/spf13/cobra\"\n)\n\nvar cfg types.Config\n\nvar rootCmd = \u0026cobra.Command{\n\tUse:   \"apex [directory]\",\n\tShort: \"Apex is the fastest and most powerful tool for generating project structure documentation.\",\n\tLong: `Apex performs a highly-concurrent scan of a directory to generate documentation\nin various formats. It supports advanced filtering and customization to provide\nthe ultimate project overview.`,\n\tArgs: cobra.MaximumNArgs(1),\n\tRun: func(cmd *cobra.Command, args []string) {\n\t\tif len(args) \u003e 0 {\n\t\t\tcfg.RootDir = args[0]\n\t\t} else {\n\t\t\tcfg.RootDir = \".\"\n\t\t}\n\t\tif err := run(); err != nil {\n\t\t\tfmt.Fprintf(os.Stderr, \"Error: %v\\n\", err)\n\t\t\tos.Exit(1)\n\t\t}\n\t},\n}\n\nfunc init() {\n\trootCmd.Flags().StringVarP(\u0026cfg.OutputFileName, \"output\", \"o\", \"project_structure.md\", \"Name of the output file.\")\n\trootCmd.Flags().StringVarP(\u0026cfg.IgnoreFileName, \"ignore-file\", \"i\", \".gitignore\", \"Path to a custom ignore file.\")\n\trootCmd.Flags().StringSliceVarP(\u0026cfg.AdditionalIgnores, \"add-ignore\", \"a\", []string{}, \"Additional patterns to ignore.\")\n\trootCmd.Flags().StringSliceVar(\u0026cfg.IncludePatterns, \"include\", []string{}, \"Only include files matching these patterns (e.g., '*.go').\")\n\trootCmd.Flags().BoolVarP(\u0026cfg.TreeOnly, \"tree-only\", \"t\", false, \"Only output the directory tree structure.\")\n\trootCmd.Flags().StringVarP(\u0026cfg.OutputFormat, \"format\", \"f\", \"markdown\", \"Output format (markdown, json).\")\n\trootCmd.Flags().Int64Var(\u0026cfg.MaxFileSize, \"max-size\", 0, \"Maximum file size to include (in bytes).\")\n\trootCmd.Flags().BoolVarP(\u0026cfg.Quiet, \"quiet\", \"q\", false, \"Suppress all interactive output except for errors.\")\n}\n\nfunc Execute() {\n\tif err := rootCmd.Execute(); err != nil {\n\t\tfmt.Println(err)\n\t\tos.Exit(1)\n\t}\n}\n\nfunc run() error {\n\tif !cfg.Quiet {\n\t\tfmt.Printf(\"[+] Starting Apex scan of: %s\\n\\n\", cfg.RootDir)\n\t}\n\n\tcfg.AdditionalIgnores = append(cfg.AdditionalIgnores, cfg.OutputFileName, \".git\")\n\n\tignoreMatcher, err := loadIgnoreMatcher(cfg.RootDir, cfg.IgnoreFileName, cfg.AdditionalIgnores)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to load ignore rules: %w\", err)\n\t}\n\n\tif !cfg.Quiet {\n\t\tfmt.Println(\"[1/3] Scanning project structure...\")\n\t}\n\tfilePaths, tree, err := discovery.DiscoverFilesAndBuildTree(\u0026cfg, ignoreMatcher)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to walk directory: %w\", err)\n\t}\n\n\tif !cfg.TreeOnly \u0026\u0026 !cfg.Quiet {\n\t\tfmt.Println(\"\\n[2/3] Reading file contents...\")\n\t}\n\n\tif !cfg.Quiet {\n\t\tstep := \"3/3\"\n\t\tif cfg.TreeOnly {\n\t\t\tstep = \"2/2\"\n\t\t}\n\t\tfmt.Printf(\"\\n[%s] Writing output to %s...\\n\", step, cfg.OutputFileName)\n\t}\n\n\tif err := output.ProcessAndWriteFiles(\u0026cfg, filePaths, tree); err != nil {\n\t\treturn fmt.Errorf(\"failed to generate output: %w\", err)\n\t}\n\n\tif !cfg.Quiet {\n\t\tfmt.Printf(\"\\n[+] Success! Project documentation saved to '%s' in %s format.\\n\", cfg.OutputFileName, cfg.OutputFormat)\n\t}\n\n\treturn nil\n}\n\nfunc loadIgnoreMatcher(rootDir, ignoreFileName string, additionalIgnores []string) (*gitignore.GitIgnore, error) {\n\tignoreFilePath := filepath.Join(rootDir, ignoreFileName)\n\tignoreMatcher, err := gitignore.CompileIgnoreFileAndLines(ignoreFilePath, additionalIgnores...)\n\tif err != nil {\n\t\tif os.IsNotExist(err) {\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"[!] Note: %s not found. Proceeding without it.\\n\", ignoreFileName)\n\t\t\t}\n\t\t\treturn gitignore.CompileIgnoreLines(additionalIgnores...), nil\n\t\t}\n\t\treturn nil, err\n\t}\n\treturn ignoreMatcher, nil\n}\n",
+    "example_run.md": "# Project Structure\n\n```\n.\n├── README.md\n├── cmd\n│   ├── root.go\n├── go.mod\n├── go.sum\n├── internal\n│   ├── discovery\n│   │   ├── walker.go\n│   ├── output\n│   │   ├── writer.go\n│   ├── types\n│   │   ├── types.go\n├── main.go\n```\n\n# File Contents\n\n---\n\n### `cmd/root.go`\n\n```go\npackage cmd\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\n\t\"github.com/kzelealem/apex/internal/discovery\"\n\t\"github.com/kzelealem/apex/internal/output\"\n\t\"github.com/kzelealem/apex/internal/types\"\n\tgitignore \"github.com/sabhiram/go-gitignore\"\n\t\"github.com/spf13/cobra\"\n)\n\nvar cfg types.Config\n\nvar rootCmd = \u0026cobra.Command{\n\tUse:   \"apex [directory]\",\n\tShort: \"Apex is the fastest and most powerful tool for generating project structure documentation.\",\n\tLong: `Apex performs a highly-concurrent scan of a directory to generate documentation\nin various formats. It supports advanced filtering and customization to provide\nthe ultimate project overview.`,\n\tArgs: cobra.MaximumNArgs(1),\n\tRun: func(cmd *cobra.Command, args []string) {\n\t\tif len(args) \u003e 0 {\n\t\t\tcfg.RootDir = args[0]\n\t\t} else {\n\t\t\tcfg.RootDir = \".\"\n\t\t}\n\t\tif err := run(); err != nil {\n\t\t\tfmt.Fprintf(os.Stderr, \"Error: %v\\n\", err)\n\t\t\tos.Exit(1)\n\t\t}\n\t},\n}\n\nfunc init() {\n\trootCmd.Flags().StringVarP(\u0026cfg.OutputFileName, \"output\", \"o\", \"project_structure.md\", \"Name of the output file.\")\n\trootCmd.Flags().StringVarP(\u0026cfg.IgnoreFileName, \"ignore-file\", \"i\", \".gitignore\", \"Path to a custom ignore file.\")\n\trootCmd.Flags().StringSliceVarP(\u0026cfg.AdditionalIgnores, \"add-ignore\", \"a\", []string{}, \"Additional patterns to ignore.\")\n\trootCmd.Flags().StringSliceVar(\u0026cfg.IncludePatterns, \"include\", []string{}, \"Only include files matching these patterns (e.g., '*.go').\")\n\trootCmd.Flags().BoolVarP(\u0026cfg.TreeOnly, \"tree-only\", \"t\", false, \"Only output the directory tree structure.\")\n\trootCmd.Flags().StringVarP(\u0026cfg.OutputFormat, \"format\", \"f\", \"markdown\", \"Output format (markdown, json).\")\n\trootCmd.Flags().Int64Var(\u0026cfg.MaxFileSize, \"max-size\", 0, \"Maximum file size to include (in bytes).\")\n\trootCmd.Flags().BoolVarP(\u0026cfg.Quiet, \"quiet\", \"q\", false, \"Suppress all interactive output except for errors.\")\n}\n\nfunc Execute() {\n\tif err := rootCmd.Execute(); err != nil {\n\t\tfmt.Println(err)\n\t\tos.Exit(1)\n\t}\n}\n\nfunc run() error {\n\tif !cfg.Quiet {\n\t\tfmt.Printf(\"[+] Starting Apex scan of: %s\\n\\n\", cfg.RootDir)\n\t}\n\n\tcfg.AdditionalIgnores = append(cfg.AdditionalIgnores, cfg.OutputFileName, \".git\")\n\n\tignoreMatcher, err := loadIgnoreMatcher(cfg.RootDir, cfg.IgnoreFileName, cfg.AdditionalIgnores)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to load ignore rules: %w\", err)\n\t}\n\n\tif !cfg.Quiet {\n\t\tfmt.Println(\"[1/3] Scanning project structure...\")\n\t}\n\tfilePaths, tree, err := discovery.DiscoverFilesAndBuildTree(\u0026cfg, ignoreMatcher)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to walk directory: %w\", err)\n\t}\n\n\tif !cfg.TreeOnly \u0026\u0026 !cfg.Quiet {\n\t\tfmt.Println(\"\\n[2/3] Reading file contents...\")\n\t}\n\n\tif !cfg.Quiet {\n\t\tstep := \"3/3\"\n\t\tif cfg.TreeOnly {\n\t\t\tstep = \"2/2\"\n\t\t}\n\t\tfmt.Printf(\"\\n[%s] Writing output to %s...\\n\", step, cfg.OutputFileName)\n\t}\n\n\tif err := output.ProcessAndWriteFiles(\u0026cfg, filePaths, tree); err != nil {\n\t\treturn fmt.Errorf(\"failed to generate output: %w\", err)\n\t}\n\n\tif !cfg.Quiet {\n\t\tfmt.Printf(\"\\n[+] Success! Project documentation saved to '%s' in %s format.\\n\", cfg.OutputFileName, cfg.OutputFormat)\n\t}\n\n\treturn nil\n}\n\nfunc loadIgnoreMatcher(rootDir, ignoreFileName string, additionalIgnores []string) (*gitignore.GitIgnore, error) {\n\tignoreFilePath := filepath.Join(rootDir, ignoreFileName)\n\tignoreMatcher, err := gitignore.CompileIgnoreFileAndLines(ignoreFilePath, additionalIgnores...)\n\tif err != nil {\n\t\tif os.IsNotExist(err) {\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"[!] Note: %s not found. Proceeding without it.\\n\", ignoreFileName)\n\t\t\t}\n\t\t\treturn gitignore.CompileIgnoreLines(additionalIgnores...), nil\n\t\t}\n\t\treturn nil, err\n\t}\n\treturn ignoreMatcher, nil\n}\n\n```\n\n---\n\n### `internal/discovery/walker.go`\n\n```go\npackage discovery\n\nimport (\n\t\"fmt\"\n\t\"io/fs\"\n\t\"path/filepath\"\n\t\"strings\"\n\n\t\"github.com/kzelealem/apex/internal/types\"\n\tgitignore \"github.com/sabhiram/go-gitignore\"\n)\n\nfunc DiscoverFilesAndBuildTree(cfg *types.Config, ignoreMatcher *gitignore.GitIgnore) ([]string, string, error) {\n\tvar filePaths []string\n\tvar treeBuilder strings.Builder\n\n\twalkErr := filepath.WalkDir(cfg.RootDir, func(path string, d fs.DirEntry, err error) error {\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\n\t\trelPath, err := filepath.Rel(cfg.RootDir, path)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif relPath == \".\" {\n\t\t\tbase := filepath.Base(cfg.RootDir)\n\t\t\ttreeBuilder.WriteString(fmt.Sprintf(\"%s\\n\", base))\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"[scan] dir: %s\\n\", base)\n\t\t\t}\n\t\t\treturn nil\n\t\t}\n\n\t\tmatchPath := relPath\n\t\tif d.IsDir() {\n\t\t\tmatchPath += string(filepath.Separator)\n\t\t}\n\t\tif ignoreMatcher.MatchesPath(matchPath) {\n\t\t\tif d.IsDir() {\n\t\t\t\treturn filepath.SkipDir\n\t\t\t}\n\t\t\treturn nil\n\t\t}\n\n\t\tif len(cfg.IncludePatterns) \u003e 0 {\n\t\t\tincluded := false\n\t\t\tfor _, pattern := range cfg.IncludePatterns {\n\t\t\t\tif matched, _ := filepath.Match(pattern, d.Name()); matched {\n\t\t\t\t\tincluded = true\n\t\t\t\t\tbreak\n\t\t\t\t}\n\t\t\t}\n\t\t\tif !d.IsDir() \u0026\u0026 !included {\n\t\t\t\treturn nil\n\t\t\t}\n\t\t}\n\n\t\tif !d.IsDir() \u0026\u0026 cfg.MaxFileSize \u003e 0 {\n\t\t\tinfo, err := d.Info()\n\t\t\tif err == nil \u0026\u0026 info.Size() \u003e cfg.MaxFileSize {\n\t\t\t\tif !cfg.Quiet {\n\t\t\t\t\tfmt.Printf(\"  [scan] skip: %s (size limit exceeded)\\n\", relPath)\n\t\t\t\t}\n\t\t\t\treturn nil\n\t\t\t}\n\t\t}\n\n\t\tdepth := strings.Count(relPath, string(filepath.Separator))\n\t\tindent := strings.Repeat(\"│   \", depth)\n\t\tprefix := \"├── \"\n\t\ttreeBuilder.WriteString(fmt.Sprintf(\"%s%s%s\\n\", indent, prefix, d.Name()))\n\n\t\tif !d.IsDir() {\n\t\t\tfilePaths = append(filePaths, path)\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"  [scan] file: %s\\n\", relPath)\n\t\t\t}\n\t\t} else {\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"  [scan] dir: %s\\n\", relPath)\n\t\t\t}\n\t\t}\n\t\treturn nil\n\t})\n\n\tif walkErr == filepath.SkipDir {\n\t\treturn filePaths, treeBuilder.String(), nil\n\t}\n\n\treturn filePaths, treeBuilder.String(), walkErr\n}\n\n```\n\n---\n\n### `internal/types/types.go`\n\n```go\npackage types\n\ntype FileData struct {\n\tPath    string\n\tContent []byte\n\tErr     error\n}\n\ntype Config struct {\n\tRootDir           string\n\tOutputFileName    string\n\tIgnoreFileName    string\n\tAdditionalIgnores []string\n\tIncludePatterns   []string\n\tTreeOnly          bool\n\tOutputFormat      string\n\tMaxFileSize       int64\n\tQuiet             bool\n}\n\n```\n\n---\n\n### `internal/output/writer.go`\n\n```go\npackage output\n\nimport (\n\t\"bufio\"\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"runtime\"\n\t\"strings\"\n\t\"sync\"\n\n\t\"github.com/kzelealem/apex/internal/types\"\n)\n\nfunc ProcessAndWriteFiles(cfg *types.Config, paths []string, tree string) error {\n\tswitch cfg.OutputFormat {\n\tcase \"markdown\":\n\t\treturn writeMarkdown(cfg, paths, tree)\n\tcase \"json\":\n\t\treturn writeJSON(cfg, paths, tree)\n\tdefault:\n\t\treturn fmt.Errorf(\"unsupported output format: %s\", cfg.OutputFormat)\n\t}\n}\n\nfunc writeMarkdown(cfg *types.Config, paths []string, tree string) error {\n\toutputFile, err := os.Create(cfg.OutputFileName)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to create output file '%s': %w\", cfg.OutputFileName, err)\n\t}\n\tdefer outputFile.Close()\n\twriter := bufio.NewWriter(outputFile)\n\tdefer writer.Flush()\n\n\twriter.WriteString(\"# Project Structure\\n\\n\")\n\twriter.WriteString(\"```\\n\")\n\twriter.WriteString(tree)\n\twriter.WriteString(\"```\\n\\n\")\n\n\tif !cfg.TreeOnly {\n\t\twriter.WriteString(\"# File Contents\\n\\n\")\n\t\treturn processFilesForMarkdown(cfg, writer, paths)\n\t}\n\treturn nil\n}\n\nfunc writeJSON(cfg *types.Config, paths []string, tree string) error {\n\toutput := make(map[string]interface{})\n\toutput[\"projectTree\"] = tree\n\tif !cfg.TreeOnly {\n\t\tfileContents := make(map[string]string)\n\t\tfor _, path := range paths {\n\t\t\trelPath, _ := filepath.Rel(cfg.RootDir, path)\n\t\t\tcontent, err := os.ReadFile(path)\n\t\t\tif err != nil {\n\t\t\t\tfileContents[relPath] = fmt.Sprintf(\"Error reading file: %v\", err)\n\t\t\t} else {\n\t\t\t\tfileContents[relPath] = string(content)\n\t\t\t}\n\t\t}\n\t\toutput[\"fileContents\"] = fileContents\n\t}\n\tjsonData, err := json.MarshalIndent(output, \"\", \"  \")\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn os.WriteFile(cfg.OutputFileName, jsonData, 0644)\n}\n\nfunc processFilesForMarkdown(cfg *types.Config, writer *bufio.Writer, paths []string) error {\n\tnumWorkers := runtime.NumCPU()\n\tpathChan := make(chan string, len(paths))\n\tresultChan := make(chan types.FileData, len(paths))\n\tvar wg sync.WaitGroup\n\n\tfor i := 0; i \u003c numWorkers; i++ {\n\t\twg.Add(1)\n\t\tgo fileReaderWorker(\u0026wg, pathChan, resultChan, cfg.RootDir)\n\t}\n\n\tfor _, path := range paths {\n\t\tpathChan \u003c- path\n\t}\n\tclose(pathChan)\n\twg.Wait()\n\tclose(resultChan)\n\n\tfor data := range resultChan {\n\t\tif !cfg.Quiet {\n\t\t\tfmt.Printf(\"  [read] %s\\n\", data.Path)\n\t\t}\n\t\tfmt.Fprintf(writer, \"---\\n\\n### `%s`\\n\\n\", data.Path)\n\t\tif data.Err != nil {\n\t\t\tfmt.Fprintf(writer, \"```\\nError reading file: %v\\n```\\n\\n\", data.Err)\n\t\t\tcontinue\n\t\t}\n\t\tlang := strings.TrimPrefix(filepath.Ext(data.Path), \".\")\n\t\tfmt.Fprintf(writer, \"```%s\\n\", lang)\n\t\twriter.Write(data.Content)\n\t\twriter.WriteString(\"\\n```\\n\\n\")\n\t}\n\n\treturn nil\n}\n\nfunc fileReaderWorker(wg *sync.WaitGroup, pathChan \u003c-chan string, resultChan chan\u003c- types.FileData, rootDir string) {\n\tdefer wg.Done()\n\tfor path := range pathChan {\n\t\trelPath, _ := filepath.Rel(rootDir, path)\n\t\tcontent, err := os.ReadFile(path)\n\t\tresultChan \u003c- types.FileData{\n\t\t\tPath:    relPath,\n\t\t\tContent: content,\n\t\t\tErr:     err,\n\t\t}\n\t}\n}\n\n```\n\n---\n\n### `main.go`\n\n```go\npackage main\n\nimport (\n\t\"github.com/kzelealem/apex/cmd\"\n)\n\nfunc main() {\n\tcmd.Execute()\n}\n\n```\n\n---\n\n### `go.sum`\n\n```sum\ngithub.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=\ngithub.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=\ngithub.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=\ngithub.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=\ngithub.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=\ngithub.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=\ngithub.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=\ngithub.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=\ngithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 h1:OkMGxebDjyw0ULyrTYWeN0UNCCkmCWfjPnIA2W6oviI=\ngithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06/go.mod h1:+ePHsJ1keEjQtpvf9HHw0f4ZeJ0TLRsxhunSI2hYJSs=\ngithub.com/spf13/cobra v1.10.1 h1:lJeBwCfmrnXthfAupyUTzJ/J4Nc1RsHC/mSRU2dll/s=\ngithub.com/spf13/cobra v1.10.1/go.mod h1:7SmJGaTHFVBY0jW4NXGluQoLvhqFQM+6XSKD+P4XaB0=\ngithub.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=\ngithub.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=\ngithub.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=\ngithub.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=\ngithub.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=\ngopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=\ngopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=\ngopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\ngopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=\n\n```\n\n---\n\n### `go.mod`\n\n```mod\nmodule github.com/kzelealem/apex\n\ngo 1.24.1\n\nrequire (\n\tgithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06\n\tgithub.com/spf13/cobra v1.10.1\n)\n\nrequire (\n\tgithub.com/inconshreveable/mousetrap v1.1.0 // indirect\n\tgithub.com/spf13/pflag v1.0.9 // indirect\n)\n\n```\n\n---\n\n### `README.md`\n\n```md\n# Apex\n\nA high-performance CLI tool for generating project structure documentation.\n\nApex scans a directory, respects gitignore rules, and creates a comprehensive document detailing the project's file tree and the contents of its files. It's designed to be fast, flexible, and easy to integrate into any workflow.\n\n## Features\n\n-   **High Performance:** Concurrently scans the file system and reads files to maximize speed.\n-   **Advanced Filtering:** Go beyond `.gitignore` with custom ignore files, on-the-fly ignore patterns, include-only filters, and file size limits.\n-   **Multiple Output Formats:** Generate documentation in Markdown for easy viewing or JSON for programmatic use.\n-   **Interactive \u0026 Quiet Modes:** Watch the process live with detailed logs or run it silently in automated scripts.\n-   **Highly Customizable:** Fine-tune the output with a rich set of command-line flags.\n\n## Installation\n\n### With Go\n\nIf you have Go installed, you can install `apex` directly:\n\n```sh\ngo install github.com/kzelealem/apex@latest\n```\n\n### From Source\n\n```sh\ngit clone https://github.com/kzelealem/apex.git\ncd apex\ngo build\n./apex --help\n```\n\n## Usage\n\n### Basic Usage\n\nTo scan the current directory and generate a `project_structure.md` file:\n\n```sh\napex\n```\n\nTo scan a specific directory:\n\n```sh\napex ../my-other-project\n```\n\n### Advanced Example\n\nGenerate a Markdown document named `docs.md` for a Go project, including only `.go` and `.mod` files, ignoring anything over 50KB:\n\n```sh\napex . -o docs.md --include \"*.go\" --include \"*.mod\" --max-size 51200\n```\n\n### Options\n\n| Flag                | Shorthand | Description                                                   | Default                |\n| ------------------- | --------- | ------------------------------------------------------------- | ---------------------- |\n| `--output`          | `-o`      | Name of the output file.                                      | `project_structure.md` |\n| `--ignore-file`     | `-i`      | Path to a custom ignore file (e.g., `.dockerignore`).         | `.gitignore`           |\n| `--add-ignore`      | `-a`      | Additional patterns to ignore (can be used multiple times).   | `[]`                   |\n| `--include`         |           | Only include files matching these patterns.                   | `[]`                   |\n| `--max-size`        |           | Maximum file size to include, in bytes. (0 for no limit).     | `0`                    |\n| `--format`          | `-f`      | Output format (`markdown` or `json`).                         | `markdown`             |\n| `--tree-only`       | `-t`      | Only output the directory tree structure, no file content.    | `false`                |\n| `--quiet`           | `-q`      | Suppress all interactive output except for errors.            | `false`                |\n| `--help`            | `-h`      | Show help message.                                            |                        |\n\n```\n\n",
+    "go.mod": "module github.com/kzelealem/apex\n\ngo 1.24.1\n\nrequire (\n\tgithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06\n\tgithub.com/spf13/cobra v1.10.1\n)\n\nrequire (\n\tgithub.com/inconshreveable/mousetrap v1.1.0 // indirect\n\tgithub.com/spf13/pflag v1.0.9 // indirect\n)\n",
+    "go.sum": "github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=\ngithub.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=\ngithub.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=\ngithub.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=\ngithub.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=\ngithub.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=\ngithub.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=\ngithub.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=\ngithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06 h1:OkMGxebDjyw0ULyrTYWeN0UNCCkmCWfjPnIA2W6oviI=\ngithub.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06/go.mod h1:+ePHsJ1keEjQtpvf9HHw0f4ZeJ0TLRsxhunSI2hYJSs=\ngithub.com/spf13/cobra v1.10.1 h1:lJeBwCfmrnXthfAupyUTzJ/J4Nc1RsHC/mSRU2dll/s=\ngithub.com/spf13/cobra v1.10.1/go.mod h1:7SmJGaTHFVBY0jW4NXGluQoLvhqFQM+6XSKD+P4XaB0=\ngithub.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=\ngithub.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=\ngithub.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=\ngithub.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=\ngithub.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=\ngopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=\ngopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=\ngopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\ngopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=\n",
+    "internal/discovery/walker.go": "package discovery\n\nimport (\n\t\"fmt\"\n\t\"io/fs\"\n\t\"path/filepath\"\n\t\"strings\"\n\n\t\"github.com/kzelealem/apex/internal/types\"\n\tgitignore \"github.com/sabhiram/go-gitignore\"\n)\n\nfunc DiscoverFilesAndBuildTree(cfg *types.Config, ignoreMatcher *gitignore.GitIgnore) ([]string, string, error) {\n\tvar filePaths []string\n\tvar treeBuilder strings.Builder\n\n\twalkErr := filepath.WalkDir(cfg.RootDir, func(path string, d fs.DirEntry, err error) error {\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\n\t\trelPath, err := filepath.Rel(cfg.RootDir, path)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif relPath == \".\" {\n\t\t\tbase := filepath.Base(cfg.RootDir)\n\t\t\ttreeBuilder.WriteString(fmt.Sprintf(\"%s\\n\", base))\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"[scan] dir: %s\\n\", base)\n\t\t\t}\n\t\t\treturn nil\n\t\t}\n\n\t\tmatchPath := relPath\n\t\tif d.IsDir() {\n\t\t\tmatchPath += string(filepath.Separator)\n\t\t}\n\t\tif ignoreMatcher.MatchesPath(matchPath) {\n\t\t\tif d.IsDir() {\n\t\t\t\treturn filepath.SkipDir\n\t\t\t}\n\t\t\treturn nil\n\t\t}\n\n\t\tif len(cfg.IncludePatterns) \u003e 0 {\n\t\t\tincluded := false\n\t\t\tfor _, pattern := range cfg.IncludePatterns {\n\t\t\t\tif matched, _ := filepath.Match(pattern, d.Name()); matched {\n\t\t\t\t\tincluded = true\n\t\t\t\t\tbreak\n\t\t\t\t}\n\t\t\t}\n\t\t\tif !d.IsDir() \u0026\u0026 !included {\n\t\t\t\treturn nil\n\t\t\t}\n\t\t}\n\n\t\tif !d.IsDir() \u0026\u0026 cfg.MaxFileSize \u003e 0 {\n\t\t\tinfo, err := d.Info()\n\t\t\tif err == nil \u0026\u0026 info.Size() \u003e cfg.MaxFileSize {\n\t\t\t\tif !cfg.Quiet {\n\t\t\t\t\tfmt.Printf(\"  [scan] skip: %s (size limit exceeded)\\n\", relPath)\n\t\t\t\t}\n\t\t\t\treturn nil\n\t\t\t}\n\t\t}\n\n\t\tdepth := strings.Count(relPath, string(filepath.Separator))\n\t\tindent := strings.Repeat(\"│   \", depth)\n\t\tprefix := \"├── \"\n\t\ttreeBuilder.WriteString(fmt.Sprintf(\"%s%s%s\\n\", indent, prefix, d.Name()))\n\n\t\tif !d.IsDir() {\n\t\t\tfilePaths = append(filePaths, path)\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"  [scan] file: %s\\n\", relPath)\n\t\t\t}\n\t\t} else {\n\t\t\tif !cfg.Quiet {\n\t\t\t\tfmt.Printf(\"  [scan] dir: %s\\n\", relPath)\n\t\t\t}\n\t\t}\n\t\treturn nil\n\t})\n\n\tif walkErr == filepath.SkipDir {\n\t\treturn filePaths, treeBuilder.String(), nil\n\t}\n\n\treturn filePaths, treeBuilder.String(), walkErr\n}\n",
+    "internal/output/writer.go": "package output\n\nimport (\n\t\"bufio\"\n\t\"encoding/json\"\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"runtime\"\n\t\"strings\"\n\t\"sync\"\n\n\t\"github.com/kzelealem/apex/internal/types\"\n)\n\nfunc ProcessAndWriteFiles(cfg *types.Config, paths []string, tree string) error {\n\tswitch cfg.OutputFormat {\n\tcase \"markdown\":\n\t\treturn writeMarkdown(cfg, paths, tree)\n\tcase \"json\":\n\t\treturn writeJSON(cfg, paths, tree)\n\tdefault:\n\t\treturn fmt.Errorf(\"unsupported output format: %s\", cfg.OutputFormat)\n\t}\n}\n\nfunc writeMarkdown(cfg *types.Config, paths []string, tree string) error {\n\toutputFile, err := os.Create(cfg.OutputFileName)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"failed to create output file '%s': %w\", cfg.OutputFileName, err)\n\t}\n\tdefer outputFile.Close()\n\twriter := bufio.NewWriter(outputFile)\n\tdefer writer.Flush()\n\n\twriter.WriteString(\"# Project Structure\\n\\n\")\n\twriter.WriteString(\"```\\n\")\n\twriter.WriteString(tree)\n\twriter.WriteString(\"```\\n\\n\")\n\n\tif !cfg.TreeOnly {\n\t\twriter.WriteString(\"# File Contents\\n\\n\")\n\t\treturn processFilesForMarkdown(cfg, writer, paths)\n\t}\n\treturn nil\n}\n\nfunc writeJSON(cfg *types.Config, paths []string, tree string) error {\n\toutput := make(map[string]interface{})\n\toutput[\"projectTree\"] = tree\n\tif !cfg.TreeOnly {\n\t\tfileContents := make(map[string]string)\n\t\tfor _, path := range paths {\n\t\t\trelPath, _ := filepath.Rel(cfg.RootDir, path)\n\t\t\tcontent, err := os.ReadFile(path)\n\t\t\tif err != nil {\n\t\t\t\tfileContents[relPath] = fmt.Sprintf(\"Error reading file: %v\", err)\n\t\t\t} else {\n\t\t\t\tfileContents[relPath] = string(content)\n\t\t\t}\n\t\t}\n\t\toutput[\"fileContents\"] = fileContents\n\t}\n\tjsonData, err := json.MarshalIndent(output, \"\", \"  \")\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn os.WriteFile(cfg.OutputFileName, jsonData, 0644)\n}\n\nfunc processFilesForMarkdown(cfg *types.Config, writer *bufio.Writer, paths []string) error {\n\tnumWorkers := runtime.NumCPU()\n\tpathChan := make(chan string, len(paths))\n\tresultChan := make(chan types.FileData, len(paths))\n\tvar wg sync.WaitGroup\n\n\tfor i := 0; i \u003c numWorkers; i++ {\n\t\twg.Add(1)\n\t\tgo fileReaderWorker(\u0026wg, pathChan, resultChan, cfg.RootDir)\n\t}\n\n\tfor _, path := range paths {\n\t\tpathChan \u003c- path\n\t}\n\tclose(pathChan)\n\twg.Wait()\n\tclose(resultChan)\n\n\tfor data := range resultChan {\n\t\tif !cfg.Quiet {\n\t\t\tfmt.Printf(\"  [read] %s\\n\", data.Path)\n\t\t}\n\t\tfmt.Fprintf(writer, \"---\\n\\n### `%s`\\n\\n\", data.Path)\n\t\tif data.Err != nil {\n\t\t\tfmt.Fprintf(writer, \"```\\nError reading file: %v\\n```\\n\\n\", data.Err)\n\t\t\tcontinue\n\t\t}\n\t\tlang := strings.TrimPrefix(filepath.Ext(data.Path), \".\")\n\t\tfmt.Fprintf(writer, \"```%s\\n\", lang)\n\t\twriter.Write(data.Content)\n\t\twriter.WriteString(\"\\n```\\n\\n\")\n\t}\n\n\treturn nil\n}\n\nfunc fileReaderWorker(wg *sync.WaitGroup, pathChan \u003c-chan string, resultChan chan\u003c- types.FileData, rootDir string) {\n\tdefer wg.Done()\n\tfor path := range pathChan {\n\t\trelPath, _ := filepath.Rel(rootDir, path)\n\t\tcontent, err := os.ReadFile(path)\n\t\tresultChan \u003c- types.FileData{\n\t\t\tPath:    relPath,\n\t\t\tContent: content,\n\t\t\tErr:     err,\n\t\t}\n\t}\n}\n",
+    "internal/types/types.go": "package types\n\ntype FileData struct {\n\tPath    string\n\tContent []byte\n\tErr     error\n}\n\ntype Config struct {\n\tRootDir           string\n\tOutputFileName    string\n\tIgnoreFileName    string\n\tAdditionalIgnores []string\n\tIncludePatterns   []string\n\tTreeOnly          bool\n\tOutputFormat      string\n\tMaxFileSize       int64\n\tQuiet             bool\n}\n",
+    "main.go": "package main\n\nimport (\n\t\"github.com/kzelealem/apex/cmd\"\n)\n\nfunc main() {\n\tcmd.Execute()\n}\n"
+  },
+  "projectTree": ".\n├── README.md\n├── cmd\n│   ├── root.go\n├── example_run.md\n├── go.mod\n├── go.sum\n├── internal\n│   ├── discovery\n│   │   ├── walker.go\n│   ├── output\n│   │   ├── writer.go\n│   ├── types\n│   │   ├── types.go\n├── main.go\n"
+}
+```
+
+---
+
+### `README.md`
+
+```md
+# Apex
+
+A high-performance CLI tool for generating project structure documentation.
+
+Apex scans a directory, respects gitignore rules, and creates a comprehensive document detailing the project's file tree and the contents of its files. It's designed to be fast, flexible, and easy to integrate into any workflow.
+
+## Features
+
+-   **High Performance:** Concurrently scans the file system and reads files to maximize speed.
+-   **Advanced Filtering:** Go beyond `.gitignore` with custom ignore files, on-the-fly ignore patterns, include-only filters, and file size limits.
+-   **Multiple Output Formats:** Generate documentation in Markdown for easy viewing or JSON for programmatic use.
+-   **Interactive & Quiet Modes:** Watch the process live with detailed logs or run it silently in automated scripts.
+-   **Highly Customizable:** Fine-tune the output with a rich set of command-line flags.
+
+## Installation
+
+### With Go
+
+If you have Go installed, you can install `apex` directly:
+
+```sh
+go install github.com/kzelealem/apex@latest
+```
+
+### From Source
+
+```sh
+git clone https://github.com/kzelealem/apex.git
+cd apex
+go build
+./apex --help
+```
+
+## Usage
+
+### Basic Usage
+
+To scan the current directory and generate a `project_structure.md` file:
+
+```sh
+apex
+```
+
+To scan a specific directory:
+
+```sh
+apex ../my-other-project
+```
+
+### Advanced Example
+
+Generate a Markdown document named `docs.md` for a Go project, including only `.go` and `.mod` files, ignoring anything over 50KB:
+
+```sh
+apex . -o docs.md --include "*.go" --include "*.mod" --max-size 51200
+```
+
+### Options
+
+| Flag                | Shorthand | Description                                                   | Default                |
+| ------------------- | --------- | ------------------------------------------------------------- | ---------------------- |
+| `--output`          | `-o`      | Name of the output file.                                      | `project_structure.md` |
+| `--ignore-file`     | `-i`      | Path to a custom ignore file (e.g., `.dockerignore`).         | `.gitignore`           |
+| `--add-ignore`      | `-a`      | Additional patterns to ignore (can be used multiple times).   | `[]`                   |
+| `--include`         |           | Only include files matching these patterns.                   | `[]`                   |
+| `--max-size`        |           | Maximum file size to include, in bytes. (0 for no limit).     | `0`                    |
+| `--format`          | `-f`      | Output format (`markdown` or `json`).                         | `markdown`             |
+| `--tree-only`       | `-t`      | Only output the directory tree structure, no file content.    | `false`                |
+| `--quiet`           | `-q`      | Suppress all interactive output except for errors.            | `false`                |
+| `--help`            | `-h`      | Show help message.                                            |                        |
+
+```
+
+---
+
+### `main.go`
+
+```go
+package main
+
+import (
+	"github.com/kzelealem/apex/cmd"
+)
+
+func main() {
+	cmd.Execute()
+}
+
+```
+
