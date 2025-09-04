@@ -10,7 +10,7 @@ builds:
     goos:
       - linux
       - windows
-      - darwin # macOS
+      - darwin
     goarch:
       - amd64
       - arm64
@@ -30,12 +30,18 @@ snapshot:
 changelog:
   sort: asc
   filters:
-    groups:
-      - title: Features
-        regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
-        order: 0
-      - title: Bug Fixes
-        regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
-        order: 1
-      - title: Other
-        order: 999
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+  groups:
+    - title: Features
+      regexp: '^feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
